@@ -1,4 +1,4 @@
-package employee
+package pomodoro
 
 import (
 	"fmt"
@@ -11,47 +11,45 @@ import (
 	"github.com/faiface/beep/wav"
 )
 
-type Pomodoro struct {
-	Type     string
-	Duration int
+type pomodoro struct {
+	Type       string
+	Duration   time.Duration
+	StartSound string
+	StopSound  string
 }
 
-type Employee struct {
-	FirstName   string
-	LastName    string
-	TotalLeaves int
-	LeavesTaken int
+func New(pomoType string, pomoDuration int, startSoundPath string, stopSoundPath string) pomodoro {
+
+	duration := time.Duration(pomoDuration) * time.Second
+	p := pomodoro{pomoType, duration, startSoundPath, stopSoundPath}
+
+	return p
 }
 
-func (e Employee) LeavesRemaining() {
-	fmt.Printf("%s %s has %d leaves remaining\n", e.FirstName, e.LastName, (e.TotalLeaves - e.LeavesTaken))
-}
-
-func (p Pomodoro) TimeRemaining() {
-	workDuration := 1 * time.Second
-	breakDuration := 1 * time.Second
-	numPomodoros := 2
+func (p pomodoro) Repeat(repetitions int) {
+	numPomodoros := repetitions
+	breakPomo := New("break", 1, "assets/sounds/start_beep.wav", "assets/sounds/stop_beep.wav")
 
 	for i := 0; i < numPomodoros; i++ {
-		fmt.Println("Starting work session...")
-		playSound("assets/sounds/start_beep.wav")
-		startTimer(workDuration)
-		playSound("assets/sounds/stop_beep.wav")
-
-		fmt.Println("Starting break session...")
-		playSound("assets/sounds/start_beep.wav")
-		startTimer(breakDuration)
-		playSound("assets/sounds/stop_beep.wav")
+		executePomodoro(p)
+		executePomodoro(breakPomo)
 	}
 
 	fmt.Println("All done! Good job!")
 }
 
-func startTimer(duration time.Duration) {
+func executePomodoro(p pomodoro) {
+	playSound(p.StartSound)
+	fmt.Printf("Starting %s session...\n", p.Type)
+	startTimer(time.Duration(p.Duration), p.Type)
+	playSound(p.StopSound)
+}
+
+func startTimer(duration time.Duration, label string) {
 	timer := time.NewTimer(duration)
 
 	<-timer.C
-	fmt.Println("Time's up!")
+	fmt.Printf("Ending %s session: Time's up!\n", label)
 }
 
 func playSound(soundFile string) {
