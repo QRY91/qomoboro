@@ -3,267 +3,140 @@ package main
 import (
 	"fmt"
 	"os"
-	"strings"
+	"path/filepath"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/huh"
-	"github.com/charmbracelet/lipgloss"
+	"qomoboro/internal/storage"
+	"qomoboro/internal/ui"
 )
 
 const (
-	padding             = 2
-	maxWidth            = 80
-	defaultPomoType     = "work"
-	defaultPomoDuration = 2
-	defaultPomoStart    = "assets/sounds/start_beep.wav"
-	defaultPomoStop     = "assets/sounds/stop_beep.wav"
-)
-
-var (
-	green  = lipgloss.AdaptiveColor{Light: "#688060", Dark: "#688060"}
-	red    = lipgloss.AdaptiveColor{Light: "#DCA3A3", Dark: "#DCA3A3"}
-	blue   = lipgloss.AdaptiveColor{Light: "#8CD0D3", Dark: "#8CD0D3"}
-	yellow = lipgloss.AdaptiveColor{Light: "#F0DFAF", Dark: "#F0DFAF"}
-)
-
-type Styles struct {
-	Base,
-	HeaderText,
-	Status,
-	StatusHeader,
-	Highlight,
-	ErrorHeaderText,
-	Help lipgloss.Style
-}
-
-func NewStyles(lg *lipgloss.Renderer) *Styles {
-	s := Styles{}
-	s.Base = lg.NewStyle().
-		Padding(1, 4, 0, 1)
-	s.HeaderText = lg.NewStyle().
-		Foreground(yellow).
-		Bold(true).
-		Padding(0, 1, 0, 2)
-	s.Status = lg.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(green).
-		PaddingLeft(1).
-		MarginTop(1)
-	s.StatusHeader = lg.NewStyle().
-		Foreground(green).
-		Bold(true)
-	s.Highlight = lg.NewStyle().
-		Foreground(blue)
-	s.ErrorHeaderText = s.HeaderText.
-		Foreground(red)
-	s.Help = lg.NewStyle().
-		Foreground(lipgloss.Color("240"))
-	return &s
-}
-
-type state int
-
-const (
-	statusNormal state = iota
-	stateDone
+	appName = "qomoboro"
+	version = "2.0.0"
 )
 
 func main() {
-	_, err := tea.NewProgram(NewModel()).Run()
+	// Get data directory
+	dataDir, err := getDataDir()
 	if err != nil {
-		fmt.Println("Oh no:", err)
+		fmt.Printf("Error getting data directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Initialize storage
+	store, err := storage.NewFileStorage(dataDir)
+	if err != nil {
+		fmt.Printf("Error initializing storage: %v\n", err)
+		os.Exit(1)
+	}
+	defer store.Close()
+
+	// Handle command line arguments
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "version", "--version", "-v":
+			fmt.Printf("%s %s\n", appName, version)
+			return
+		case "help", "--help", "-h":
+			showHelp()
+			return
+		case "data-dir", "--data-dir":
+			fmt.Printf("Data directory: %s\n", dataDir)
+			return
+		case "backup", "--backup":
+			if err := store.Backup(); err != nil {
+				fmt.Printf("Error creating backup: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println("Backup created successfully")
+			return
+		}
+	}
+
+	// Create and run the TUI application
+	app := ui.NewApp(store)
+	if err := app.Run(); err != nil {
+		fmt.Printf("Error running application: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-type Model struct {
-	state     state
-	lg        *lipgloss.Renderer
-	styles    *Styles
-	form      *huh.Form
-	width     int
-	worktime  string
-	breaktime string
-}
-
-func NewModel() Model {
-	m := Model{width: maxWidth}
-	m.lg = lipgloss.DefaultRenderer()
-	m.styles = NewStyles(m.lg)
-
-	m.form = huh.NewForm(
-		huh.NewGroup(
-			huh.NewNote().
-				Title("QOMOBORO").
-				Description("pomodoro\n\n\n\n").
-				Next(true).
-				NextLabel("next"),
-		),
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Key("worktime").
-				Options(huh.NewOptions("15 min", "20 min", "30 min")...).
-				Title("choose work duration").
-				Description("how long before a break?").
-				Value(&m.worktime),
-
-			huh.NewSelect[string]().
-				Key("breaktime").
-				Options(huh.NewOptions("5", "10", "15")...).
-				Title("choose break duration").
-				Description("how long to regain focus?").
-				Value(&m.breaktime),
-
-			huh.NewConfirm().
-				Key("done").
-				Title("ready?").
-				Validate(func(v bool) error {
-					if !v {
-						return fmt.Errorf("welp, finish up then")
-					}
-					return nil
-				}).
-				Affirmative("yes").
-				Negative("no"),
-		),
-	).
-		WithWidth(45).
-		WithShowHelp(false).
-		WithShowErrors(false)
-	return m
-}
-
-func (m Model) Init() tea.Cmd {
-	return m.form.Init()
-}
-
-func min(x, y int) int {
-	if x > y {
-		return y
-	}
-	return x
-}
-
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width = min(msg.Width, maxWidth) - m.styles.Base.GetHorizontalFrameSize()
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "esc", "ctrl+c", "q":
-			return m, tea.Quit
-		}
+// getDataDir returns the data directory for the application
+func getDataDir() (string, error) {
+	// Try XDG_DATA_HOME first
+	if xdgDataHome := os.Getenv("XDG_DATA_HOME"); xdgDataHome != "" {
+		return filepath.Join(xdgDataHome, appName), nil
 	}
 
-	var cmds []tea.Cmd
-
-	// Process the form
-	form, cmd := m.form.Update(msg)
-	if f, ok := form.(*huh.Form); ok {
-		m.form = f
-		cmds = append(cmds, cmd)
+	// Fall back to ~/.local/share
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get home directory: %w", err)
 	}
 
-	if m.form.State == huh.StateCompleted {
-		// Quit when the form is done.
-		cmds = append(cmds, tea.Quit)
-	}
-
-	return m, tea.Batch(cmds...)
+	return filepath.Join(homeDir, ".local", "share", appName), nil
 }
 
-func (m Model) View() string {
-	s := m.styles
+// showHelp displays usage information
+func showHelp() {
+	fmt.Printf(`%s %s - Canonical Hours Task Manager
 
-	var worktime string
-	if m.form.GetString("worktime") != "" {
-		worktime = "work for " + m.form.GetString("worktime")
-	}
-	var breaktime string
-	if m.form.GetString("breaktime") != "" {
-		breaktime = "rest for " + m.form.GetString("breaktime") + " minutes"
-	}
+A systematic task management tool built with Go and Charmbracelet TUI components,
+designed around canonical hours and gamified productivity tracking.
 
-	switch m.form.State {
-	case huh.StateCompleted:
-		var b strings.Builder
-		fmt.Fprintf(&b, "Imagine working for %s.\n", worktime)
-		fmt.Fprintf(&b, "Now imagine resting for %s.\n\nCongratulations!\nYou've imagined yourself useful.\n", breaktime)
+USAGE:
+    %s [command]
 
-		// shaketime, strErr := strconv.Atoi(breaktime)
-		// if strErr != nil {
-		// 	panic(strErr)
-		// }
+COMMANDS:
+    help, --help, -h     Show this help message
+    version, --version, -v Show version information
+    data-dir, --data-dir Show data directory path
+    backup, --backup     Create a backup of all data
 
-		// t := pomodoro.New(defaultPomoType, shaketime, defaultPomoStart, defaultPomoStop)
-		// t.Repeat(3)
-		return s.Status.Margin(0, 1).Padding(1, 2).Width(48).Render(b.String()) + "\n\n"
-	default:
+NAVIGATION (in TUI):
+    [t] Tasks       - Manage your tasks
+    [s] Schedule    - View canonical hours
+    [d] Statistics  - View productivity stats
+    [c] Create      - Add new task
+    [g] Settings    - Configure app
+    [r] Refresh     - Reload data
+    [q] Quit        - Exit application
 
-		// Form (left side)
-		v := strings.TrimSuffix(m.form.View(), "\n\n")
-		form := m.lg.NewStyle().Margin(1, 0).Render(v)
+TASK MANAGEMENT:
+    ↑/↓ or k/j      - Navigate lists
+    Enter           - View details
+    Space           - Toggle task status
+    c               - Create new task
+    d               - Delete task
+    q/Esc           - Go back
 
-		// Status (right side)
-		var status string
-		{
-			var (
-				qomoInfo = "(None)"
-			)
+SCORING SYSTEM:
+    Each task is scored on three dimensions (0-5):
+    - Work: Business/professional productivity value
+    - Play: Recreation/leisure/enjoyment value
+    - Learn: Educational/skill development value
 
-			if m.form.GetString("worktime") != "" {
-				qomoInfo = fmt.Sprintf("%s\n%s", worktime, breaktime)
-			}
+CANONICAL HOURS:
+    Traditional time blocks adapted for modern productivity:
+    - Matins (06:00-07:30): Deep work, planning
+    - Lauds (07:30-09:00): Administrative tasks
+    - Prime (09:00-12:00): High-focus work blocks
+    - Terce (12:00-13:30): Meetings, collaboration
+    - Sext (13:30-15:00): Lunch, recovery
+    - None (15:00-16:30): Creative work, experimentation
+    - Vespers (16:30-18:00): Learning, documentation
+    - Compline (18:00-20:00): Planning, reflection
 
-			const statusWidth = 28
-			statusMarginLeft := m.width - statusWidth - lipgloss.Width(form) - s.Status.GetMarginRight()
-			status = s.Status.
-				Height(lipgloss.Height(form)).
-				Width(statusWidth).
-				MarginLeft(statusMarginLeft).
-				Render(s.StatusHeader.Render("qurrent qomo qonfig") + "\n" + qomoInfo)
-		}
+DATA LOCATION:
+    Configuration and data are stored in:
+    - Linux/macOS: ~/.local/share/qomoboro/
+    - Or $XDG_DATA_HOME/qomoboro/ if XDG_DATA_HOME is set
 
-		errors := m.form.Errors()
-		header := m.appBoundaryView("qomoboro")
-		if len(errors) > 0 {
-			header = m.appErrorBoundaryView(m.errorView())
-		}
-		body := lipgloss.JoinHorizontal(lipgloss.Top, form, status)
+EXAMPLES:
+    %s                    # Start the TUI application
+    %s --version          # Show version
+    %s --data-dir         # Show data directory
+    %s --backup           # Create backup
 
-		footer := m.appBoundaryView(m.form.Help().ShortHelpView(m.form.KeyBinds()))
-		if len(errors) > 0 {
-			footer = m.appErrorBoundaryView("")
-		}
-
-		return s.Base.Render(header + "\n" + body + "\n\n" + footer)
-	}
-}
-
-func (m Model) errorView() string {
-	var s string
-	for _, err := range m.form.Errors() {
-		s += err.Error()
-	}
-	return s
-}
-
-func (m Model) appBoundaryView(text string) string {
-	return lipgloss.PlaceHorizontal(
-		m.width,
-		lipgloss.Left,
-		m.styles.HeaderText.Render(text),
-		lipgloss.WithWhitespaceChars("/"),
-		lipgloss.WithWhitespaceForeground(green),
-	)
-}
-
-func (m Model) appErrorBoundaryView(text string) string {
-	return lipgloss.PlaceHorizontal(
-		m.width,
-		lipgloss.Left,
-		m.styles.ErrorHeaderText.Render(text),
-		lipgloss.WithWhitespaceChars("/"),
-		lipgloss.WithWhitespaceForeground(red),
-	)
+For more information, visit: https://github.com/QRY91/qomoboro
+`, appName, version, appName, appName, appName, appName, appName)
 }
