@@ -153,6 +153,13 @@ type App struct {
 	error           error
 	message         string
 	quitting        bool
+
+	// Form data
+	formTitle       string
+	formDescription string
+	formWorkScore   int
+	formPlayScore   int
+	formLearnScore  int
 }
 
 // NewApp creates a new TUI application
@@ -204,6 +211,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case tea.KeyMsg:
+		// Global Ctrl+C handling
+		if msg.String() == "ctrl+c" {
+			return a, tea.Quit
+		}
+
 		switch a.currentView {
 		case ViewModeMain:
 			return a.updateMain(msg)
@@ -243,7 +255,7 @@ func (a *App) updateMain(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.currentView = ViewModeStats
 	case "c":
 		a.currentView = ViewModeCreateTask
-		a.initCreateTaskForm()
+		return a, a.initCreateTaskForm()
 	case "g":
 		a.currentView = ViewModeSettings
 	case "r":
@@ -273,7 +285,7 @@ func (a *App) updateTaskList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "c":
 		a.currentView = ViewModeCreateTask
-		a.initCreateTaskForm()
+		return a, a.initCreateTaskForm()
 	case "d":
 		if a.selectedIndex < len(a.tasks) {
 			task := a.tasks[a.selectedIndex]
@@ -329,22 +341,27 @@ func (a *App) updateStats(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // updateCreateTask handles task creation form
 func (a *App) updateCreateTask(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
+	// Handle escape to exit form
+	if msg.String() == "esc" {
 		a.currentView = ViewModeTaskList
 		return a, nil
 	}
 
+	// Let form handle all other keys (including Tab, Enter, etc.)
 	if a.form != nil {
 		form, cmd := a.form.Update(msg)
 		if f, ok := form.(*huh.Form); ok {
 			a.form = f
 
+			// Check if form is completed
 			if a.form.State == huh.StateCompleted {
 				a.createTaskFromForm()
 				a.currentView = ViewModeTaskList
 			}
+
+			return a, cmd
 		}
+		// If cast failed, still return the cmd
 		return a, cmd
 	}
 
@@ -666,64 +683,85 @@ func (a *App) viewSettings() string {
 }
 
 // initCreateTaskForm initializes the task creation form
-func (a *App) initCreateTaskForm() {
+func (a *App) initCreateTaskForm() tea.Cmd {
+	// Reset form data
+	a.formTitle = ""
+	a.formDescription = ""
+	a.formWorkScore = 0
+	a.formPlayScore = 0
+	a.formLearnScore = 0
+
 	a.form = huh.NewForm(
 		huh.NewGroup(
 			huh.NewInput().
 				Key("title").
 				Title("Task Title").
 				Description("What needs to be done?").
-				Placeholder("Enter task title..."),
-
+				Placeholder("Enter task title...").
+				Value(&a.formTitle).
+				Validate(func(str string) error {
+					if len(strings.TrimSpace(str)) == 0 {
+						return fmt.Errorf("title cannot be empty")
+					}
+					return nil
+				}),
+		),
+		huh.NewGroup(
 			huh.NewText().
 				Key("description").
-				Title("Description").
-				Description("Additional details (optional)").
-				Placeholder("Enter description..."),
-
+				Title("Description (Optional)").
+				Description("Additional details").
+				Placeholder("Enter description...").
+				Value(&a.formDescription),
+		),
+		huh.NewGroup(
 			huh.NewSelect[int]().
 				Key("work").
-				Title("Work Score (0-5)").
-				Description("How much does this contribute to work/business?").
+				Title("Work Score").
+				Description("Business/professional value (0-5)").
 				Options(
-					huh.NewOption("0", 0),
-					huh.NewOption("1", 1),
-					huh.NewOption("2", 2),
-					huh.NewOption("3", 3),
-					huh.NewOption("4", 4),
-					huh.NewOption("5", 5),
+					huh.NewOption("0 - No work value", 0),
+					huh.NewOption("1 - Minimal work impact", 1),
+					huh.NewOption("2 - Minor work benefit", 2),
+					huh.NewOption("3 - Moderate work value", 3),
+					huh.NewOption("4 - Important work contribution", 4),
+					huh.NewOption("5 - Critical business task", 5),
 				).
-				Value(new(int)),
-
+				Value(&a.formWorkScore),
+		),
+		huh.NewGroup(
 			huh.NewSelect[int]().
 				Key("play").
-				Title("Play Score (0-5)").
-				Description("How enjoyable/recreational is this?").
+				Title("Play Score").
+				Description("Enjoyment/recreation value (0-5)").
 				Options(
-					huh.NewOption("0", 0),
-					huh.NewOption("1", 1),
-					huh.NewOption("2", 2),
-					huh.NewOption("3", 3),
-					huh.NewOption("4", 4),
-					huh.NewOption("5", 5),
+					huh.NewOption("0 - No enjoyment", 0),
+					huh.NewOption("1 - Minimal enjoyment", 1),
+					huh.NewOption("2 - Slightly enjoyable", 2),
+					huh.NewOption("3 - Moderately enjoyable", 3),
+					huh.NewOption("4 - Very enjoyable", 4),
+					huh.NewOption("5 - Extremely fun", 5),
 				).
-				Value(new(int)),
-
+				Value(&a.formPlayScore),
+		),
+		huh.NewGroup(
 			huh.NewSelect[int]().
 				Key("learn").
-				Title("Learn Score (0-5)").
-				Description("How much will you learn from this?").
+				Title("Learn Score").
+				Description("Learning/skill development value (0-5)").
 				Options(
-					huh.NewOption("0", 0),
-					huh.NewOption("1", 1),
-					huh.NewOption("2", 2),
-					huh.NewOption("3", 3),
-					huh.NewOption("4", 4),
-					huh.NewOption("5", 5),
+					huh.NewOption("0 - No learning", 0),
+					huh.NewOption("1 - Minimal learning", 1),
+					huh.NewOption("2 - Some learning", 2),
+					huh.NewOption("3 - Moderate learning", 3),
+					huh.NewOption("4 - Significant learning", 4),
+					huh.NewOption("5 - Major learning opportunity", 5),
 				).
-				Value(new(int)),
+				Value(&a.formLearnScore),
 		),
 	)
+
+	return a.form.Init()
 }
 
 // createTaskFromForm creates a task from the form data
@@ -732,14 +770,21 @@ func (a *App) createTaskFromForm() {
 		return
 	}
 
+	// Use the form data from struct fields
+	title := strings.TrimSpace(a.formTitle)
+	if title == "" {
+		a.error = fmt.Errorf("task title cannot be empty")
+		return
+	}
+
 	task := &models.Task{
 		ID:          fmt.Sprintf("task_%d", time.Now().UnixNano()),
-		Title:       a.form.GetString("title"),
-		Description: a.form.GetString("description"),
+		Title:       title,
+		Description: a.formDescription,
 		Score: models.Score{
-			Work:  a.form.Get("work").(int),
-			Play:  a.form.Get("play").(int),
-			Learn: a.form.Get("learn").(int),
+			Work:  a.formWorkScore,
+			Play:  a.formPlayScore,
+			Learn: a.formLearnScore,
 		},
 		Status:    models.TaskStatusPending,
 		CreatedAt: time.Now(),
